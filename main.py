@@ -5,10 +5,10 @@ import time
 # Alpha beta pruning done
 # Quiescent Search done
 # piece square tables done
+# endgame logic done
+# mvv lva move ordering done
+# TODO: piece immobility penalties, threefold repetition logic, transposition table
 
-# TODO: piece immobility penalties, MVV LVA move ordering, endgame logic, threefold repetition logic
-
-start_time = time.time()
 
 PIECE_VALUES = {
     "P": 100,
@@ -100,20 +100,21 @@ piece_square_tables = {
 }
 
 PROMOTION_BONUS = {
-    "QUEEN" : 1000,
-    "ROOK" : 500,
-    "KNIGHT" : 200,
-    "BİSHOP" : 100
+    chess.QUEEN: 1000,
+    chess.ROOK: 500,
+    chess.KNIGHT: 200,
+    chess.BISHOP: 100,
 }
 
 FEN = input("input FEN: ")
 if FEN == "f":
     FEN = "rnb1kbnr/ppp1pppp/8/8/8/2N5/PPPB1PPP/R2QKBNR b KQkq - 0 4"
 board = chess.Board(FEN)
+start_time = time.time()
 
 
 def flatten_board(chessboard):
-    flattened =  [board.piece_at(sq) for sq in chess.SQUARES]
+    flattened =  [chessboard.piece_at(sq) for sq in chess.SQUARES]
     readable = []
     for piece in flattened:
         if piece == None:
@@ -125,12 +126,12 @@ def flatten_board(chessboard):
 
 EVALUATED = 0
 
-def endgame_ratio(board):
+def endgame_ratio(chessboard):
     # to determine the endgame, amount of pieces (EXCLUDING KINGS AND PAWNS) need to be summed
     pieces = 0
 
     for i in range(64):
-        piece = board.piece_at(i)
+        piece = chessboard.piece_at(i)
         if piece == None:
             continue
         piece_symbol = piece.symbol()
@@ -142,15 +143,19 @@ def endgame_ratio(board):
     # interpolate between
     return max(0, min(1, ((8-pieces) / 4)))
 
-
-def evaluate(board):
+def is_into_enemy_pawn_attack(chessboard: chess.Board, move: chess.Move):
+    enemy = not chessboard.turn
+    enemy_pawns = chessboard.pieces(chess.PAWN, enemy)
+    enemy_pawn_attackers = chessboard.attackers(enemy, move.to_square) & enemy_pawns
+    return enemy_pawn_attackers != 0
+def evaluate(chessboard):
     global EVALUATED
 
     evaluation = 0
-    endgameness = endgame_ratio(board)
+    endgameness = endgame_ratio(chessboard)
 
     for i in range(64):
-        piece = board.piece_at(i)
+        piece = chessboard.piece_at(i)
         if piece == None:
             continue
         piece_symbol = piece.symbol()
@@ -180,22 +185,24 @@ def evaluate(board):
     if EVALUATED % 1000 == 0: print(EVALUATED)
     return evaluation
 
-def order_moves(moves, board: chess.Board):
+def order_moves(moves, chessboard: chess.Board):
     scored = []
+    CHECK_BONUS = 75
+    PAWN_ATTACK_PENALTY_FACTOR = .75
 
     for move in moves:
         score = 0
 
-        attacker = board.piece_at(move.from_square)
-        attacker_value = PIECE_VALUES[attacker.piece_type]
+        attacker = chessboard.piece_at(move.from_square)
+        attacker_value = PIECE_VALUES[attacker.symbol().upper()]
 
         # MVV LVA
-        if board.is_capture(move):
-            if board.is_en_passant(move):
-                victim_piece_type = chess.PAWN
+        if chessboard.is_capture(move):
+            if chessboard.is_en_passant(move):
+                victim_piece_type = "P"
             else:
-                victim = board.piece_at(move.to_square)
-                victim_piece_type = victim.piece_type
+                victim = chessboard.piece_at(move.to_square)
+                victim_piece_type = victim.symbol().upper()
 
             victim_value = PIECE_VALUES[victim_piece_type]
             score += (victim_value - attacker_value)
@@ -204,28 +211,38 @@ def order_moves(moves, board: chess.Board):
         if move.promotion is not None:
             score += PROMOTION_BONUS.get(move.promotion, 0)
 
+        # check bonus
+        if chessboard.gives_check(move):
+            score += CHECK_BONUS
+
+        # penalty for moving into pawn attack
+        if is_into_enemy_pawn_attack(chessboard, move):
+            if not board.is_capture(move):
+                score -= attacker_value * PAWN_ATTACK_PENALTY_FACTOR
+
         scored.append((score, move))
 
     scored.sort(key=lambda x: x[0], reverse=True)
+    #print(scored)
     return [m for _, m in scored]
-def captured_piece(board: chess.Board, move: chess.Move):
-    if not board.is_capture(move):
+def captured_piece(chessboard: chess.Board, move: chess.Move):
+    if not chessboard.is_capture(move):
         return None
 
-    if board.is_en_passant(move):
+    if chessboard.is_en_passant(move):
         ep_square = chess.square(
             chess.square_file(move.to_square),
             chess.square_rank(move.from_square)
         )
-        return board.piece_at(ep_square)
+        return chessboard.piece_at(ep_square)
 
-    return board.piece_at(move.to_square)
+    return chessboard.piece_at(move.to_square)
 def qui_search(chessboard, alpha, beta):
     static_evaluation = evaluate(chessboard)
     best_eval = static_evaluation
     best_line = []
 
-    MAXIMIZING_PLAYER = board.turn
+    MAXIMIZING_PLAYER = chessboard.turn
     if MAXIMIZING_PLAYER:
         if static_evaluation > beta:
             return beta, []
@@ -241,24 +258,25 @@ def qui_search(chessboard, alpha, beta):
         if static_evaluation - 1000 > beta: # stop looking? position is too bad?
             return beta, []
 
-    capture_moves = [move for move in board.legal_moves if board.is_capture(move)]
+    unordered_capture_moves = [move for move in chessboard.legal_moves if chessboard.is_capture(move)]
+    capture_moves = order_moves(unordered_capture_moves, chessboard)
     for capture in capture_moves:
-        captured = captured_piece(board, capture)
-        captured_value = PIECE_VALUES[captured.symbol()]
-        board.push(capture)
+        captured = captured_piece(chessboard, capture)
+        captured_value = PIECE_VALUES[captured.symbol().upper()]
+        chessboard.push(capture)
 
         if MAXIMIZING_PLAYER:
             if static_evaluation + captured_value + 300 < alpha:
                 # dont bother capturing if the capture doesnt even change the best move you can force
-                board.pop()
+                chessboard.pop()
                 continue
         else:
             if static_evaluation - captured_value - 300 > beta:
-                board.pop()
+                chessboard.pop()
                 continue
 
         evaluation, child_line = qui_search(chessboard, alpha, beta)
-        board.pop()
+        chessboard.pop()
         full_line = [capture] + child_line
         if MAXIMIZING_PLAYER:
             if evaluation > best_eval:
@@ -284,29 +302,31 @@ def search(chessboard, top_depth = 6, depth = 6, alpha = -MATE_SCORE, beta = MAT
     if depth == 0:
         evalu, best_line = qui_search(chessboard, alpha, beta)
         return evalu, best_line
-    MAXIMIZING_PLAYER = board.turn
-    moves = list(chessboard.legal_moves)
+    MAXIMIZING_PLAYER = chessboard.turn
+    unordered_moves = list(chessboard.legal_moves)
 
     best_eval = 99999 # For black
     if MAXIMIZING_PLAYER: # for white
         best_eval = -99999
     best_line = []
 
-    if not any(board.legal_moves):
+    if not any(unordered_moves):
         # No legal moves: either checkmate or stalemate.
-        if board.is_check():
+        if chessboard.is_check():
             checkmate_score = MATE_SCORE - (top_depth - depth) # Prefering earlier checkmates
-            if board.turn == chess.WHITE:
+            if chessboard.turn == chess.WHITE:
                 checkmate_score = -checkmate_score
             return checkmate_score, []
         else:
             # Stalemate
             return 0, []
 
+    moves = order_moves(unordered_moves, chessboard)
+
     for move in moves:
-        board.push(move)
+        chessboard.push(move)
         evalu, child_line = search(chessboard, top_depth, depth - 1, alpha, beta)
-        board.pop()
+        chessboard.pop()
 
         if MAXIMIZING_PLAYER:
             if evalu > best_eval:
