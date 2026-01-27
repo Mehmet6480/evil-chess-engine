@@ -13,7 +13,9 @@ import zobrist
 # piece square tables done
 # endgame logic done
 # mvv lva move ordering done
-# TODO: piece immobility penalties,
+# pst endgames done
+# iterative deepening done
+
 
 
 PIECE_VALUES = {
