@@ -1,6 +1,12 @@
 import cython_chess
 import chess
 import time
+from cProfile import Profile
+from transposition import TranspositionTable
+from pstats import Stats
+import zobrist
+
+
 # Minimax search done
 # Alpha beta pruning done
 # Quiescent Search done
@@ -29,10 +35,10 @@ PIECE_VALUES = {
 piece_square_tables = {
     "P": [
          0,   0,   0,   0,   0,   0,   0,   0,
-        25,  20,  15,  10,  10,  15,  20,  25,
-        15,  10,   5,   0,   0,   5,  10,  15,
-        10,   0,   0,  20,  20,   0,   0,  10,
-         5,   5,  10,  35,  35,  10,   5,   5,
+        50,  20,  15,  10,  10,  15,  20,  50,
+        35,  10,   5,   0,   0,   5,  10,  35,
+        25,   0,   0,  20,  20,   0,   0,  25,
+        15,   5,  10,  35,  35,  10,   5,   15,
         10,  10,  20,  30,  30, -15,  10,  10,
         10,  10,  10,  10,  10,  10,  10,  10,
          0,   0,   0,   0,   0,   0,   0,   0
@@ -112,16 +118,6 @@ if FEN == "f":
 board = chess.Board(FEN)
 start_time = time.time()
 
-
-def flatten_board(chessboard):
-    flattened =  [chessboard.piece_at(sq) for sq in chess.SQUARES]
-    readable = []
-    for piece in flattened:
-        if piece == None:
-            readable.append(".")
-            continue
-        readable.append(piece.symbol())
-    return readable
 
 
 EVALUATED = 0
@@ -258,7 +254,8 @@ def qui_search(chessboard, alpha, beta):
         if static_evaluation - 1000 > beta: # stop looking? position is too bad?
             return beta, []
 
-    unordered_capture_moves = [move for move in chessboard.legal_moves if chessboard.is_capture(move)]
+    all_moves = cython_chess.generate_legal_moves(chessboard, chess.BB_ALL, chess.BB_ALL)
+    unordered_capture_moves = [move for move in all_moves if chessboard.is_capture(move)]
     capture_moves = order_moves(unordered_capture_moves, chessboard)
     for capture in capture_moves:
         captured = captured_piece(chessboard, capture)
@@ -297,38 +294,67 @@ def qui_search(chessboard, alpha, beta):
 
 
 MATE_SCORE = 10000000
-def search(chessboard, top_depth = 6, depth = 6, alpha = -MATE_SCORE, beta = MATE_SCORE, best_line = []):
+def search(
+    chessboard: chess.Board,
+    transposition_table,
+    key: int,
+    top_depth=6,
+    depth=6,
+    alpha=-MATE_SCORE,
+    beta=MATE_SCORE,
+):
+    alpha0 = alpha
+    beta0 = beta
+
+    # TT lookup uses current key
+    tt_entry = transposition_table.lookup(key)
+    if tt_entry and tt_entry["depth"] >= depth:
+        if tt_entry["bound"] == "EXACT":
+            return tt_entry["eval"], tt_entry["best"]
+        if tt_entry["bound"] == "LOWER":
+            alpha = max(alpha, tt_entry["eval"])
+        elif tt_entry["bound"] == "UPPER":
+            beta = min(beta, tt_entry["eval"])
+        if alpha >= beta:
+            return tt_entry["eval"], tt_entry["best"]
 
     if depth == 0:
         evalu, best_line = qui_search(chessboard, alpha, beta)
         return evalu, best_line
-    MAXIMIZING_PLAYER = chessboard.turn
-    unordered_moves = list(chessboard.legal_moves)
 
-    best_eval = 99999 # For black
-    if MAXIMIZING_PLAYER: # for white
-        best_eval = -99999
+    maximizing = chessboard.turn
+    moves = list(cython_chess.generate_legal_moves(chessboard, chess.BB_ALL, chess.BB_ALL))
+
+    if not moves:
+        if chessboard.is_check():
+            mate = MATE_SCORE - (top_depth - depth)
+            if chessboard.turn == chess.WHITE:
+                mate = -mate
+            return mate, []
+        return 0, []
+
+    moves = order_moves(moves, chessboard)
+
+    best_eval = -MATE_SCORE if maximizing else MATE_SCORE
     best_line = []
 
-    if not any(unordered_moves):
-        # No legal moves: either checkmate or stalemate.
-        if chessboard.is_check():
-            checkmate_score = MATE_SCORE - (top_depth - depth) # Prefering earlier checkmates
-            if chessboard.turn == chess.WHITE:
-                checkmate_score = -checkmate_score
-            return checkmate_score, []
-        else:
-            # Stalemate
-            return 0, []
-
-    moves = order_moves(unordered_moves, chessboard)
-
     for move in moves:
-        chessboard.push(move)
-        evalu, child_line = search(chessboard, top_depth, depth - 1, alpha, beta)
+        # push + update key together
+        new_key = zobrist.update_zobrist_key(chessboard, key, move)  # this PUSHES on chessboard !!!
+
+        evalu, child_line = search(
+            chessboard,
+            transposition_table,
+            new_key,
+            top_depth=top_depth,
+            depth=depth - 1,
+            alpha=alpha,
+            beta=beta,
+        )
+
         chessboard.pop()
 
-        if MAXIMIZING_PLAYER:
+        if maximizing:
             if evalu > best_eval:
                 best_eval = evalu
                 best_line = [move] + child_line
@@ -342,7 +368,36 @@ def search(chessboard, top_depth = 6, depth = 6, alpha = -MATE_SCORE, beta = MAT
         if alpha >= beta:
             break
 
+    # Determine bound using ORIGINAL window (alpha0, beta0)
+    bound = "EXACT"
+    if best_eval <= alpha0:
+        bound = "UPPER"
+    elif best_eval >= beta0:
+        bound = "LOWER"
+
+    transposition_table.store(
+        key,         # store under the key of the CURRENT position
+        best_eval,
+        depth,
+        best_line,
+        bound,
+    )
+
     return best_eval, best_line
 
-print(search(board, 4, 4))
-print("time elapsed:", round((time.time() - start_time), 2), "s")
+
+def test():
+    transposition_table = TranspositionTable()
+    init_Zkey = zobrist.zobrist_key(board)
+    print(search(board, transposition_table, init_Zkey, 4, 4))
+    print("time elapsed:", round((time.time() - start_time), 2), "s")
+    print("total TT hits:", transposition_table.total_hits)
+
+
+profiler = Profile()
+profiler.runcall(test)
+stats = Stats(profiler)
+stats.strip_dirs()
+stats.sort_stats("cumulative")
+stats.print_stats()
+# 8.88s
