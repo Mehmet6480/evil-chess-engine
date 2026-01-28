@@ -6,18 +6,6 @@ from transposition import TranspositionTable
 from pstats import Stats
 import zobrist
 
-
-# Minimax search done
-# Alpha beta pruning done
-# Quiescent Search done
-# piece square tables done
-# endgame logic done
-# mvv lva move ordering done
-# pst endgames done
-# iterative deepening done
-# killer move heuristics done
-
-
 PIECE_VALUES = {
     "P": 100,
     "N": 300,
@@ -34,8 +22,8 @@ PIECE_VALUES = {
     "q": -900,
 }
 
-piece_square_tables = {
-    "P": [
+MIDGAME_PST = {
+    chess.PAWN: [
         0, 0, 0, 0, 0, 0, 0, 0,
         98, 134, 61, 95, 68, 126, 34, -11,
         -6, 7, 26, 31, 65, 56, 25, -20,
@@ -45,17 +33,7 @@ piece_square_tables = {
         -35, -1, -20, -23, -15, 24, 38, -22,
         0, 0, 0, 0, 0, 0, 0, 0
     ],
-    "PE" : [
-        0, 0, 0, 0, 0, 0, 0, 0,
-        178, 173, 158, 134, 147, 132, 165, 187,
-        94, 100, 85, 67, 56, 53, 82, 84,
-        32, 24, 13, 5, -2, 4, 17, 17,
-        13, 9, -3, -7, -7, -8, 3, -1,
-        4, 7, -6, 1, 0, -5, -1, -8,
-        13, 8, 8, 10, 13, 0, 2, -7,
-        0, 0, 0, 0, 0, 0, 0, 0
-    ],
-    "N": [
+    chess.KNIGHT: [
         -167, -89, -34, -49,  61, -97, -15, -107,
          -73, -41,  72,  36,  23,  62,   7,  -17,
          -47,  60,  37,  65,  84, 129,  73,   44,
@@ -65,17 +43,7 @@ piece_square_tables = {
          -29, -53, -12,  -3,  -1,  18, -14,  -19,
         -105, -21, -58, -33, -17, -28, -19,  -23
     ],
-    "NE": [
-        -58, -38, -13, -28, -31, -27, -63, -99,
-        -25, -8, -25, -2, -9, -25, -24, -52,
-        -24, -20, 10, 9, -1, -9, -19, -41,
-        -17, 3, 22, 22, 22, 11, 8, -18,
-        -18, -6, 16, 25, 16, 17, 4, -18,
-        -23, -3, -1, 15, 10, -3, -20, -22,
-        -42, -20, -10, -5, -2, -20, -23, -44,
-        -29, -51, -23, -15, -22, -18, -50, -64,
-    ],
-    "B": [
+    chess.BISHOP: [
         -29, 4, -82, -37, -25, -42, 7, -8,
         -26, 16, -18, -13, 30, 59, 18, -47,
         -16, 37, 43, 40, 35, 50, 37, -2,
@@ -85,17 +53,7 @@ piece_square_tables = {
         4, 15, 16, 0, 7, 21, 33, 1,
         -33, -3, -14, -21, -13, -12, -39, -21
     ],
-    "BE" : [
-        -14, -21, -11, -8, -7, -9, -17, -24,
-        -8, -4, 7, -12, -3, -13, -4, -14,
-        2, -8, 0, -1, -2, 6, 0, 4,
-        -3, 9, 12, 9, 14, 10, 3, 2,
-        -6, 3, 13, 19, 7, 10, -3, -9,
-        -12, -3, 8, 10, 13, 3, -7, -15,
-        -14, -18, -7, -1, 4, -9, -15, -27,
-        -23, -9, -23, -5, -9, -16, -5, -17
-    ],
-    "R": [
+    chess.ROOK: [
         32, 42, 32, 51, 63, 9, 31, 43,
         27, 32, 58, 62, 80, 67, 26, 44,
         -5, 19, 26, 36, 17, 45, 61, 16,
@@ -105,17 +63,7 @@ piece_square_tables = {
         -44, -16, -20, -9, -1, 11, -6, -71,
         -19, -13, 1, 17, 16, 7, -37, -26
     ],
-    "RE" : [
-        13, 10, 18, 15, 12, 12, 8, 5,
-        11, 13, 13, 11, -3, 3, 8, 3,
-        7, 7, 7, 5, 4, -3, -5, -3,
-        4, 3, 13, 1, 2, 1, -1, 2,
-        3, 5, 8, 4, -5, -6, -8, -11,
-        -4, 0, -5, -1, -7, -12, -8, -16,
-        -6, -6, 0, 2, -9, -9, -11, -3,
-        -9, 2, 3, -1, -5, -13, 4, -20,
-    ],
-    "Q": [
+    chess.QUEEN: [
         -28, 0, 29, 12, 59, 44, 43, 45,
         -24, -39, -5, 1, -16, 57, 28, 54,
         -13, -17, 7, 8, 29, 56, 47, 57,
@@ -125,7 +73,59 @@ piece_square_tables = {
         -35, -8, 11, 2, 8, 15, -3, 1,
         -1, -18, -9, 10, -15, -25, -31, -50,
     ],
-    "QE" : [
+    chess.KING: [
+        -65, 23, 16, -15, -56, -34, 2, 13,
+        29, -1, -20, -7, -8, -4, -38, -29,
+        -9, 24, 2, -16, -20, 6, 22, -22,
+        -17, -20, -12, -27, -30, -25, -14, -36,
+        -49, -1, -27, -39, -46, -44, -33, -51,
+        -14, -14, -22, -46, -44, -30, -15, -27,
+        1, 7, -8, -64, -43, -16, 9, 8,
+        -15, 36, 12, -54, 8, -28, 24, 14,
+    ]
+}
+ENDGAME_PST = {
+    chess.PAWN: [
+        0, 0, 0, 0, 0, 0, 0, 0,
+        178, 173, 158, 134, 147, 132, 165, 187,
+        94, 100, 85, 67, 56, 53, 82, 84,
+        32, 24, 13, 5, -2, 4, 17, 17,
+        13, 9, -3, -7, -7, -8, 3, -1,
+        4, 7, -6, 1, 0, -5, -1, -8,
+        13, 8, 8, 10, 13, 0, 2, -7,
+        0, 0, 0, 0, 0, 0, 0, 0
+    ],
+    chess.KNIGHT: [
+        -58, -38, -13, -28, -31, -27, -63, -99,
+        -25, -8, -25, -2, -9, -25, -24, -52,
+        -24, -20, 10, 9, -1, -9, -19, -41,
+        -17, 3, 22, 22, 22, 11, 8, -18,
+        -18, -6, 16, 25, 16, 17, 4, -18,
+        -23, -3, -1, 15, 10, -3, -20, -22,
+        -42, -20, -10, -5, -2, -20, -23, -44,
+        -29, -51, -23, -15, -22, -18, -50, -64,
+    ],
+    chess.BISHOP: [
+        -14, -21, -11, -8, -7, -9, -17, -24,
+        -8, -4, 7, -12, -3, -13, -4, -14,
+        2, -8, 0, -1, -2, 6, 0, 4,
+        -3, 9, 12, 9, 14, 10, 3, 2,
+        -6, 3, 13, 19, 7, 10, -3, -9,
+        -12, -3, 8, 10, 13, 3, -7, -15,
+        -14, -18, -7, -1, 4, -9, -15, -27,
+        -23, -9, -23, -5, -9, -16, -5, -17
+    ],
+    chess.ROOK: [
+        13, 10, 18, 15, 12, 12, 8, 5,
+        11, 13, 13, 11, -3, 3, 8, 3,
+        7, 7, 7, 5, 4, -3, -5, -3,
+        4, 3, 13, 1, 2, 1, -1, 2,
+        3, 5, 8, 4, -5, -6, -8, -11,
+        -4, 0, -5, -1, -7, -12, -8, -16,
+        -6, -6, 0, 2, -9, -9, -11, -3,
+        -9, 2, 3, -1, -5, -13, 4, -20,
+    ],
+    chess.QUEEN: [
         -9, 22, 22, 27, 27, 19, 10, 20,
         -17, 20, 32, 41, 58, 25, 30, 0,
         -20, 6, 9, 49, 47, 35, 19, 9,
@@ -135,17 +135,7 @@ piece_square_tables = {
         -22, -23, -30, -16, -16, -23, -36, -32,
         -33, -28, -22, -43, -5, -32, -20, -41,
     ],
-    "K": [
-        -65, 23, 16, -15, -56, -34, 2, 13,
-        29, -1, -20, -7, -8, -4, -38, -29,
-        -9, 24, 2, -16, -20, 6, 22, -22,
-        -17, -20, -12, -27, -30, -25, -14, -36,
-        -49, -1, -27, -39, -46, -44, -33, -51,
-        -14, -14, -22, -46, -44, -30, -15, -27,
-        1, 7, -8, -64, -43, -16, 9, 8,
-        -15, 36, 12, -54, 8, -28, 24, 14,
-    ],
-    "KE": [
+    chess.KING: [
         -74, -35, -18, -18, -11, 15, 4, -17,
         -12, 17, 14, 17, 17, 38, 23, 11,
         10, 17, 23, 15, 20, 45, 44, 13,
@@ -205,59 +195,62 @@ def efficient_endgameness_udpate(chessboard : chess.Board, move : chess.Move):
 non_kp_pieces = non_king_or_pawn_pieces(board)
 endgameness = max(0.0, min(1.0, (8 - non_kp_pieces) / 4.0))
 
+WHITE_PST_COORDS = [56 - ((sq // 8) * 8) + (sq % 8) for sq in range(64)]
+BLACK_PST_COORDS = [63 - WHITE_PST_COORDS[sq] for sq in range(64)]
+VALUES = [0, 100, 300, 325, 500, 900, 0]
 def evaluate(chessboard):
 
-    evaluation = 0
-
-    piece_map = chessboard.piece_map()
-    for square, piece in piece_map.items():
-        pt = piece.piece_type
-        color = piece.color
-
-        # material value
-        if pt == chess.PAWN:
-            piece_value = 100
-        elif pt == chess.KNIGHT:
-            piece_value = 300
-        elif pt == chess.BISHOP:
-            piece_value = 325
-        elif pt == chess.ROOK:
-            piece_value = 500
-        elif pt == chess.QUEEN:
-            piece_value = 900
-        else: # i know this is only for kings, but pycharm wont shut up about how piece_value might be referenced before assignment.
-            piece_value = 0
-
-        position_coord = 56 - ((square // 8) * 8) + (square % 8)
-        # This formula converts coordinates from the cython-chess system so that they are compatible with the piece_squares_table system
-        # Couldn't bother redoing the piece square tables so... this will do
-
-        if color == chess.BLACK:
-            position_coord = (63 - position_coord) # flipping coords for black pieces
-
-        # positional value
-        if pt == chess.KING:
-            positional_value = (1-endgameness) * piece_square_tables["K"][position_coord] + endgameness * piece_square_tables["KE"][position_coord]
-        elif pt == chess.PAWN:
-            positional_value = (1-endgameness) * piece_square_tables["P"][position_coord] + endgameness * piece_square_tables["PE"][position_coord]
-        elif pt == chess.KNIGHT:
-            positional_value = (1-endgameness) * piece_square_tables["N"][position_coord] + endgameness * piece_square_tables["NE"][position_coord]
-        elif pt == chess.BISHOP:
-            positional_value = (1-endgameness) * piece_square_tables["B"][position_coord] + endgameness * piece_square_tables["BE"][position_coord]
-        elif pt == chess.ROOK:
-            positional_value = (1-endgameness) * piece_square_tables["R"][position_coord] + endgameness * piece_square_tables["RE"][position_coord]
-        elif pt == chess.QUEEN:
-            positional_value = (1-endgameness) * piece_square_tables["Q"][position_coord] + endgameness * piece_square_tables["QE"][position_coord]
+    # local copies of global values for extra speed
+    phase = endgameness
+    midgame_pst = MIDGAME_PST
+    endgame_pst = ENDGAME_PST
+    white_coords = WHITE_PST_COORDS
+    black_coords = BLACK_PST_COORDS
+    piece_values = VALUES
 
 
-        total_value = piece_value + positional_value
+    midgame_score = 0
+    endgame_score = 0
 
+    for piece_type in (chess.PAWN, chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN, chess.KING):
+        base_value = piece_values[piece_type]
 
-        if color == chess.BLACK:
-            total_value *= -1
+        mg_table = midgame_pst[piece_type]
+        eg_table = endgame_pst[piece_type]
 
-        evaluation += total_value
+        # BITBOARDS instead of piece_map for more speed
+        # 64 bit integers representing locations of each piece type
+        white_bitboard = chessboard.pieces_mask(piece_type, chess.WHITE)
+        while white_bitboard:
+            least_significant_bit = white_bitboard & -white_bitboard
+            #  This does assume two's complement representation for integers (which should be a safe bet).
+            # To form a negative number under two's complement, take the positive number, invert every bit, and then add 1.
+            # The inversion changes every bit (obviously). The adding 1 will cause a 1 to "ripple up" to the first bit that is a 0 (which was a 1 in the original number).
+            # every bit after the LSB will be inverted, so AND with the original version will get rid of them
+            square = least_significant_bit.bit_length() - 1
 
+            midgame_score += base_value
+            midgame_score += mg_table[white_coords[square]]
+            endgame_score += base_value
+            endgame_score += eg_table[white_coords[square]]
+
+            white_bitboard ^= least_significant_bit # get rid of least significant bit.
+            # since the least significant bit and the original value will all have the LSB index as 1, it will be turned to 0
+            # other bit indexes will be untouched
+
+        black_bitboard = chessboard.pieces_mask(piece_type, chess.BLACK)
+        while black_bitboard:
+            least_significant_bit = black_bitboard & -black_bitboard
+            square = least_significant_bit.bit_length() - 1
+
+            midgame_score -= base_value
+            midgame_score -= mg_table[black_coords[square]]
+            endgame_score -= base_value
+            endgame_score -= eg_table[black_coords[square]]
+
+            black_bitboard ^= least_significant_bit
+
+    evaluation = phase*endgame_score + (1-phase)*midgame_score
     return evaluation
 
 BB_FILE_A = chess.BB_FILE_A
@@ -569,8 +562,8 @@ def iterative_deepening(target_depth):
         #print("total TT hits:", transposition_table.total_hits)
 
 
+iterative_deepening(7)
 
-#iterative_deepening(6)
 
 """
 def run():
@@ -582,6 +575,8 @@ stats.strip_dirs()
 stats.sort_stats("cumulative")
 stats.print_stats()
 stats.dump_stats(filename= "debug.prof")
+
+
 """
 
 
