@@ -15,7 +15,7 @@ import zobrist
 # mvv lva move ordering done
 # pst endgames done
 # iterative deepening done
-
+# killer move heuristics done
 
 
 PIECE_VALUES = {
@@ -272,11 +272,13 @@ def pawn_attacks_mask(pawns_bb, color):
         right = (pawns_bb & ~BB_FILE_H) >> 7
     return left | right
 
-def order_moves(moves, chessboard: chess.Board, current_depth : int):
+def order_moves(moves, chessboard: chess.Board, current_depth : int, ply, use_killers = True):
     INDEXED_PIECE_VALUES = [0, 100, 300, 325, 500, 900, 0]
     scored = []
     CHECK_BONUS = 75
     PAWN_ATTACK_PENALTY_FACTOR = .75
+    KILLER1_BONUS = 160
+    KILLER2_BONUS = 90
 
     enemy = not chessboard.turn
     enemy_pawns_bb = chessboard.pieces_mask(chess.PAWN, enemy)
@@ -289,8 +291,11 @@ def order_moves(moves, chessboard: chess.Board, current_depth : int):
         attacker = chessboard.piece_at(move.from_square)
         attacker_value = INDEXED_PIECE_VALUES[attacker.piece_type]
 
+        is_capture = chessboard.is_capture(move)
+        is_promotion = (move.promotion is not None)
+
         # MVV LVA
-        if chessboard.is_capture(move):
+        if is_capture:
             if chessboard.is_en_passant(move):
                 victim_piece_type = "P"
             else:
@@ -301,7 +306,7 @@ def order_moves(moves, chessboard: chess.Board, current_depth : int):
             score += (victim_value - attacker_value)
 
         # promotion bonus
-        if move.promotion is not None:
+        if is_promotion:
             score += PROMOTION_BONUS.get(move.promotion, 0)
 
         # check bonus
@@ -310,8 +315,17 @@ def order_moves(moves, chessboard: chess.Board, current_depth : int):
                 score += CHECK_BONUS
 
         # penalty for moving into pawn attack
-        if not chessboard.is_capture(move) and (enemy_pawn_attacks & BB_SQUARES[move.to_square]):
+        if not is_capture and (enemy_pawn_attacks & BB_SQUARES[move.to_square]):
             score -= attacker_value * PAWN_ATTACK_PENALTY_FACTOR
+
+        # killer move bonus
+        if use_killers and (not is_capture) and (not is_promotion):
+            killer1 = killer1_list[ply]
+            killer2 = killer2_list[ply]
+            if move == killer1:
+                score += KILLER1_BONUS
+            elif move == killer2:
+                score += KILLER2_BONUS
 
         scored.append((score, move))
 
@@ -357,7 +371,7 @@ def qui_search(chessboard, alpha, beta):
             return beta, []
 
     unordered_capture_moves = cython_chess.generate_legal_captures(chessboard, chess.BB_ALL, chess.BB_ALL)
-    capture_moves = order_moves(unordered_capture_moves, chessboard, 0)
+    capture_moves = order_moves(unordered_capture_moves, chessboard, 0, 0, False)
     for capture in capture_moves:
         captured = captured_piece(chessboard, capture)
         captured_value = PIECE_VALUES[captured.symbol().upper()]
@@ -408,6 +422,9 @@ def qui_search(chessboard, alpha, beta):
 
 
 MATE_SCORE = 10000000
+MAX_POSSIBLE_SEARCH_DEPTH = 48
+killer1_list = [None] * MAX_POSSIBLE_SEARCH_DEPTH
+killer2_list = [None] * MAX_POSSIBLE_SEARCH_DEPTH
 def search(
     chessboard: chess.Board,
     transposition_table,
@@ -420,9 +437,11 @@ def search(
 ):
     global non_kp_pieces
     global endgameness
+
+
     alpha0 = alpha
     beta0 = beta
-
+    ply = top_depth - depth
     #if depth+1 == top_depth:
     #    print("top depth node progress, ", time.time() - start_time)
 
@@ -447,7 +466,7 @@ def search(
 
     if not moves:
         if chessboard.is_check():
-            mate = MATE_SCORE - (top_depth - depth)
+            mate = MATE_SCORE - ply
             if chessboard.turn == chess.WHITE:
                 mate = -mate
             return mate, []
@@ -464,11 +483,11 @@ def search(
             idx = moves.index(preferred_move)
             if idx != 0:
                 moves[0], moves[idx] = moves[idx], moves[0]
-            moves = [moves[0]] + order_moves(moves[1:], chessboard, depth)
+            moves = [moves[0]] + order_moves(moves[1:], chessboard, depth, ply)
         except ValueError:
-            moves = order_moves(moves, chessboard, depth)
+            moves = order_moves(moves, chessboard, depth, ply)
     else:
-        moves = order_moves(moves, chessboard, depth)
+        moves = order_moves(moves, chessboard, depth, ply)
 
     best_eval = -MATE_SCORE if maximizing else MATE_SCORE
     best_line = []
@@ -510,6 +529,14 @@ def search(
             beta = min(beta, best_eval)
 
         if alpha >= beta:
+            # record the aforementioned killer move
+
+            if (not chessboard.is_capture(move) and (move.promotion is None)): # important to filter out captures and promotions since those are already favorable
+                # additionally, captures are very position-dependent
+                if killer1_list[ply] != move:
+                    killer2_list[ply] = killer1_list[ply]
+                    killer1_list[ply] = move
+
             break
 
     # Determine bound using ORIGINAL window (alpha0, beta0)
@@ -543,8 +570,11 @@ def iterative_deepening(target_depth):
 
 
 
-iterative_deepening(9)
+#iterative_deepening(6)
+
 """
+def run():
+    iterative_deepening(5)
 profiler = Profile()
 profiler.runcall(run)
 stats = Stats(profiler)
@@ -552,8 +582,10 @@ stats.strip_dirs()
 stats.sort_stats("cumulative")
 stats.print_stats()
 stats.dump_stats(filename= "debug.prof")
-
 """
 
 
+
+
+# fen: r1b1kb1r/1pp2ppp/p2q1n2/3p4/5P2/2NBP3/PPPB2PP/R2QK2R w KQkq - 1 10
 # 8.88s
