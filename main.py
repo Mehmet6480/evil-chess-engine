@@ -156,7 +156,7 @@ PROMOTION_BONUS = {
 
 FEN = input("input FEN: ")
 if FEN == "f":
-    FEN = "rnb1kbnr/ppp1pppp/8/8/8/2N5/PPPB1PPP/R2QKBNR b KQkq - 0 4"
+    FEN = "r1b1kb1r/1pp2ppp/p2q1n2/3p4/5P2/2NBP3/PPPB2PP/R2QK2R w KQkq - 1 10"
 board = chess.Board(FEN)
 start_time = time.time()
 
@@ -196,8 +196,26 @@ non_kp_pieces = non_king_or_pawn_pieces(board)
 endgameness = max(0.0, min(1.0, (8 - non_kp_pieces) / 4.0))
 
 WHITE_PST_COORDS = [56 - ((sq // 8) * 8) + (sq % 8) for sq in range(64)]
-BLACK_PST_COORDS = [63 - WHITE_PST_COORDS[sq] for sq in range(64)]
+BLACK_PST_COORDS = [WHITE_PST_COORDS[chess.square_mirror(sq)] for sq in range(64)]
 VALUES = [0, 100, 300, 325, 500, 900, 0]
+
+
+
+KING_RING_SQUARES = [None] * 64
+
+for ksq in range(64):
+    bb = chess.BB_KING_ATTACKS[ksq]
+    squares = []
+    while bb:
+        lsb = bb & -bb
+        squares.append(lsb.bit_length() - 1)
+        bb ^= lsb
+    KING_RING_SQUARES[ksq] = tuple(squares)
+
+
+ATTACK_MULTIPLIERS = [0, 0, 0.5, 0.75, 0.88, 0.94, 0.97, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+# the logic is that 1 piece by itself cannot really attack and 2 pieces will be a weak attack, etc.
+# king safety penalty will be multiplied by the amt of pieces attacking.
 def evaluate(chessboard):
 
     # local copies of global values for extra speed
@@ -207,10 +225,13 @@ def evaluate(chessboard):
     white_coords = WHITE_PST_COORDS
     black_coords = BLACK_PST_COORDS
     piece_values = VALUES
+    KING_SAFETY_PENALTY = 17
+    midgame_score = 0 ; endgame_score = 0
+    white_king_attackers = 0 ; black_king_attackers = 0
+    white_king_ring_attacked = 0 ; black_king_ring_attacked = 0
 
-
-    midgame_score = 0
-    endgame_score = 0
+    white_king_sq = chessboard.king(chess.WHITE) ; white_king_ring = chess.BB_KING_ATTACKS[white_king_sq]
+    black_king_sq = chessboard.king(chess.BLACK) ; black_king_ring = chess.BB_KING_ATTACKS[black_king_sq]
 
     for piece_type in (chess.PAWN, chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN, chess.KING):
         base_value = piece_values[piece_type]
@@ -228,7 +249,6 @@ def evaluate(chessboard):
             # The inversion changes every bit (obviously). The adding 1 will cause a 1 to "ripple up" to the first bit that is a 0 (which was a 1 in the original number).
             # every bit after the LSB will be inverted, so AND with the original version will get rid of them
             square = least_significant_bit.bit_length() - 1
-
             midgame_score += base_value
             midgame_score += mg_table[white_coords[square]]
             endgame_score += base_value
@@ -238,17 +258,39 @@ def evaluate(chessboard):
             # since the least significant bit and the original value will all have the LSB index as 1, it will be turned to 0
             # other bit indexes will be untouched
 
+            # black king safety!
+            BKR_attack_intersection = chessboard.attacks_mask(square) & black_king_ring
+            intersection_magnitude = BKR_attack_intersection.bit_count()
+            black_king_ring_attacked += intersection_magnitude
+            if intersection_magnitude > 0:
+                black_king_attackers += 1
+
         black_bitboard = chessboard.pieces_mask(piece_type, chess.BLACK)
         while black_bitboard:
             least_significant_bit = black_bitboard & -black_bitboard
             square = least_significant_bit.bit_length() - 1
-
             midgame_score -= base_value
             midgame_score -= mg_table[black_coords[square]]
             endgame_score -= base_value
             endgame_score -= eg_table[black_coords[square]]
 
             black_bitboard ^= least_significant_bit
+
+            WKR_attack_intersection = chessboard.attacks_mask(square) & white_king_ring
+            intersection_magnitude = WKR_attack_intersection.bit_count()
+            white_king_ring_attacked += intersection_magnitude
+            if intersection_magnitude > 0:
+                white_king_attackers += 1
+
+    # white king safety penalty
+    white_king_safety_penalty = KING_SAFETY_PENALTY * white_king_ring_attacked * ATTACK_MULTIPLIERS[white_king_attackers]
+    #print("white king safety penalty: ", white_king_safety_penalty)
+    midgame_score -= white_king_safety_penalty
+
+    #black king safety penalty
+    black_king_safety_penalty = KING_SAFETY_PENALTY * black_king_ring_attacked * ATTACK_MULTIPLIERS[black_king_attackers]
+    #print("black king safety penalty: ", black_king_safety_penalty)
+    midgame_score += black_king_safety_penalty
 
     evaluation = phase*endgame_score + (1-phase)*midgame_score
     return evaluation
@@ -283,8 +325,8 @@ def order_moves(moves, chessboard: chess.Board, current_depth : int, ply, use_ki
 
         attacker = chessboard.piece_at(move.from_square)
         attacker_value = INDEXED_PIECE_VALUES[attacker.piece_type]
-
-        is_capture = chessboard.is_capture(move)
+        move_to = move.to_square
+        is_capture = chess.BB_SQUARES[move_to] & chessboard.occupied_co[not chessboard.turn]
         is_promotion = (move.promotion is not None)
 
         # MVV LVA
@@ -292,7 +334,7 @@ def order_moves(moves, chessboard: chess.Board, current_depth : int, ply, use_ki
             if chessboard.is_en_passant(move):
                 victim_piece_type = "P"
             else:
-                victim = chessboard.piece_at(move.to_square)
+                victim = chessboard.piece_at(move_to)
                 victim_piece_type = victim.symbol().upper()
 
             victim_value = PIECE_VALUES[victim_piece_type]
@@ -303,12 +345,15 @@ def order_moves(moves, chessboard: chess.Board, current_depth : int, ply, use_ki
             score += PROMOTION_BONUS.get(move.promotion, 0)
 
         # check bonus
+        """
         if current_depth >= 2: # gives_check is computationally expensive so avoid calling it at shallow depths.
             if chessboard.gives_check(move):
                 score += CHECK_BONUS
+        """
+
 
         # penalty for moving into pawn attack
-        if not is_capture and (enemy_pawn_attacks & BB_SQUARES[move.to_square]):
+        if not is_capture and (enemy_pawn_attacks & BB_SQUARES[move_to]):
             score -= attacker_value * PAWN_ATTACK_PENALTY_FACTOR
 
         # killer move bonus
@@ -375,7 +420,6 @@ def qui_search(chessboard, alpha, beta):
         efficient_endgameness_udpate(chessboard, capture)
 
         chessboard.push(capture)
-
         if MAXIMIZING_PLAYER:
             if static_evaluation + captured_value + 300 < alpha:
                 # dont bother capturing if the capture doesnt even change the best move you can force
@@ -426,7 +470,8 @@ def search(
     depth=6,
     alpha=-MATE_SCORE,
     beta=MATE_SCORE,
-    search_first = None
+    search_first = None,
+    check_streak = 0
 ):
     global non_kp_pieces
     global endgameness
@@ -485,25 +530,47 @@ def search(
     best_eval = -MATE_SCORE if maximizing else MATE_SCORE
     best_line = []
 
-    for move in moves:
+    for move_index, move in enumerate(moves):
 
         old_non_kp = non_kp_pieces
         old_endg = endgameness
+        is_capture = chessboard.is_capture(move)
+        is_promotion = (move.promotion is not None)
+        is_killer = (move == killer1_list[ply]) or (move == killer2_list[ply])
+        gives_check = False
+        if depth >= 2 and (not is_capture) and (not is_promotion):
+            gives_check = chessboard.gives_check(move)
+
+        if gives_check and check_streak < 2: # look further into checks.
+            extension = 1
+            check_streak += 1
+        else:
+            extension = 0
+            check_streak = 0
+
+
+        # LMR is only for STATISTICALLY PROBABLY BAD MOVES, so those metrics help determine that status.
+        lmr_eligible = (depth >= LMR_MIN_DEPTH and move_index >= LMR_FULL_MOVES and (not is_capture) and (not is_promotion) and (not is_killer) and (not gives_check))
+
 
         efficient_endgameness_udpate(chessboard, move)
         # push + update key together
         new_key = zobrist.update_zobrist_key(chessboard, key, move)  # this PUSHES a move on the chessboard !!!
 
-        evalu, child_line = search(
-            chessboard,
-            transposition_table,
-            new_key,
-            top_depth=top_depth,
-            depth=depth - 1,
-            alpha=alpha,
-            beta=beta,
-            search_first= None
-        )
+        if lmr_eligible:
+            r = late_move_reductions(depth, move_index)
+            reduced_depth = depth - 1 - r
+            if reduced_depth < 0: reduced_depth = 0
+            evalu, child_line = search(chessboard, transposition_table, new_key, top_depth= top_depth, depth = reduced_depth, alpha = alpha, beta = beta, search_first = None)
+            # reduced depth search.
+            if maximizing: needs_full_search = (evalu > alpha)
+            else: needs_full_search = (evalu < beta)
+
+            if needs_full_search and r > 0:
+                evalu, child_line = search(chessboard, transposition_table, new_key, top_depth = top_depth, depth = depth - 1, alpha = alpha, beta = beta, search_first = None)
+        else: # normal search
+            evalu, child_line = search(chessboard, transposition_table, new_key, top_depth=top_depth, depth=depth - 1, alpha=alpha, beta=beta, search_first= None, check_streak= check_streak)
+
 
         chessboard.pop()
 
@@ -549,7 +616,23 @@ def search(
 
     return best_eval, best_line
 
+LMR_MIN_DEPTH = 3
+LMR_FULL_MOVES = 3
+LMR_MAX_REDUCTION = 3
+def late_move_reductions(depth, move_index): # most quiet moves at the end of move ordering are quite bad, so dont search them deeply initally.
+    if depth < LMR_MIN_DEPTH:
+        return 0
+    if move_index < LMR_FULL_MOVES:
+        return 0
 
+    r = 1
+    if depth >= 6: # this is just a logarithmic curve.
+        r += 1
+    if move_index >= 8:
+        r += 1
+    if move_index >= 16:
+        r += 1
+    return min(r, LMR_MAX_REDUCTION)
 def iterative_deepening(target_depth):
     transposition_table = TranspositionTable()
     init_Zkey = zobrist.zobrist_key(board)
@@ -558,12 +641,18 @@ def iterative_deepening(target_depth):
         evaluation, best_line = (search(board, transposition_table, init_Zkey, top_depth = i, depth =  i, search_first = best_move))
         best_move = best_line[0]
         print(f"== DEPTH {i} time elapsed:", round((time.time() - start_time), 2), f"s - Eval: {round((evaluation/100),2)}, best move {best_move} ==")
-
+        if i == target_depth:
+            best_line_str = ""
+            for move in best_line:
+                best_line_str += str(move)
+                best_line_str += " "
+            print(best_line_str)
         #print("total TT hits:", transposition_table.total_hits)
 
 
-iterative_deepening(7)
 
+
+iterative_deepening(8)
 
 """
 def run():
@@ -575,10 +664,7 @@ stats.strip_dirs()
 stats.sort_stats("cumulative")
 stats.print_stats()
 stats.dump_stats(filename= "debug.prof")
-
-
 """
-
 
 
 
