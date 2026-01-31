@@ -1,5 +1,7 @@
 import main
 import chess
+import zobrist
+from repetition import RepetitionTable
 
 ILLEGAL_MOVE_MESSAGE = """
 put a legal move you donut.
@@ -27,6 +29,10 @@ def play_game(bot_thinking_time):
         initial_state = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
         chessboard = chess.Board(initial_state)
 
+    rep = RepetitionTable()
+    key = zobrist.zobrist_key(chessboard)
+    rep.increment(key)
+
     player_color = input("do you want to play as white? (y) yes (n) no ")
     if player_color == "y" and chessboard.turn == chess.WHITE:
         while True:
@@ -35,12 +41,15 @@ def play_game(bot_thinking_time):
                 break
             except chess.InvalidMoveError:
                 print(ILLEGAL_MOVE_MESSAGE)
-        chessboard.push(player_move)
+        key = zobrist.update_zobrist_key(chessboard, key, player_move)
+        rep.increment(key)
     print(chessboard.fen())
 
+
     while True:
-        bot_move = (main.iterative_deepening(bot_thinking_time, chessboard.fen()))
-        chessboard.push(bot_move)
+        bot_move = (main.iterative_deepening(bot_thinking_time, chessboard.fen(), rep, key))
+        key = zobrist.update_zobrist_key(chessboard, key, bot_move)
+        rep.increment(key)
 
         if chessboard.is_game_over():
             print("game over")
@@ -53,11 +62,12 @@ def play_game(bot_thinking_time):
                 break
             except chess.InvalidMoveError:
                 print(ILLEGAL_MOVE_MESSAGE)
-        chessboard.push(player_move)
+        key = zobrist.update_zobrist_key(chessboard, key, player_move)
+        rep.increment(key)
 
         if chessboard.is_game_over():
             print("game over")
             print("result: ", chessboard.result())
             return
 
-play_game(10)
+play_game(9)

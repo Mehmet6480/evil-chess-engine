@@ -1,6 +1,5 @@
 class TranspositionTable:
     def __init__(self, size_mb = 256):
-        self.size = size_mb * (2**20) // 6
         self.table = {}
         self.lookups = 0
         self.total_hits = 0

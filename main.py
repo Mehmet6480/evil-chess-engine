@@ -3,8 +3,10 @@ import chess
 import time
 from cProfile import Profile
 from transposition import TranspositionTable
+from repetition import RepetitionTable
 from pstats import Stats
 import zobrist
+
 
 board = chess.Board()
 
@@ -302,6 +304,15 @@ def evaluate(chessboard):
     midgame_score += black_king_safety_penalty
 
     evaluation = phase*endgame_score + (1-phase)*midgame_score
+
+    # mop up score
+    MOP_UP_THRESHOLD = 200
+    if endgameness == 1:
+        MD = (abs(chess.square_file(white_king_sq) - chess.square_file(black_king_sq)) + abs(chess.square_rank(white_king_sq) - chess.square_rank(black_king_sq)))
+        if evaluation > MOP_UP_THRESHOLD:
+            evaluation += 42 - (3*MD)
+        elif evaluation < -MOP_UP_THRESHOLD:
+            evaluation -= 42 - (3*MD)
     return evaluation
 
 BB_FILE_A = chess.BB_FILE_A
@@ -474,13 +485,15 @@ killer2_list = [None] * MAX_POSSIBLE_SEARCH_DEPTH
 def search(
     chessboard: chess.Board,
     transposition_table,
+    repetition_table,
     key: int,
-    top_depth=6,
-    depth=6,
-    alpha=-MATE_SCORE,
-    beta=MATE_SCORE,
+    top_depth = 6,
+    depth = 6,
+    alpha = -MATE_SCORE,
+    beta = MATE_SCORE,
     search_first = None,
-    check_streak = 0
+    check_streak = 0,
+    ply = 0
 ):
     global non_kp_pieces
     global endgameness
@@ -488,9 +501,11 @@ def search(
 
     alpha0 = alpha
     beta0 = beta
-    ply = top_depth - depth
     #if depth+1 == top_depth:
     #    print("top depth node progress, ", time.time() - start_time)
+
+    # Repetition table lookup
+
 
     # TT lookup uses current key
     tt_entry = transposition_table.lookup(key)
@@ -546,16 +561,10 @@ def search(
         is_capture = chessboard.is_capture(move)
         is_promotion = (move.promotion is not None)
         is_killer = (move == killer1_list[ply]) or (move == killer2_list[ply])
-        gives_check = False
-        if depth >= 2 and (not is_capture) and (not is_promotion):
-            gives_check = chessboard.gives_check(move)
+        gives_check = (depth >= 2) and chessboard.gives_check(move)
 
-        if gives_check and check_streak < 2: # look further into checks.
-            extension = 1
-            check_streak += 1
-        else:
-            extension = 0
-            check_streak = 0
+        extension = 1 if (gives_check and check_streak < 2) else 0
+        child_check_streak = (check_streak + 1) if gives_check else 0
 
 
         # LMR is only for STATISTICALLY PROBABLY BAD MOVES, so those metrics help determine that status.
@@ -566,23 +575,27 @@ def search(
         # push + update key together
         new_key = zobrist.update_zobrist_key(chessboard, key, move)  # this PUSHES a move on the chessboard !!!
 
-        if lmr_eligible:
-            r = late_move_reductions(depth, move_index)
-            reduced_depth = depth - 1 - r
-            if reduced_depth < 0: reduced_depth = 0
-            evalu, child_line = search(chessboard, transposition_table, new_key, top_depth= top_depth, depth = reduced_depth, alpha = alpha, beta = beta, search_first = None)
-            # reduced depth search.
-            if maximizing: needs_full_search = (evalu > alpha)
-            else: needs_full_search = (evalu < beta)
+        repetition_table.increment(new_key)
+        if repetition_table.lookup(new_key) >= 3: #threefold rep. found
+            evalu, child_line = 0, []
+        else:
+            if lmr_eligible:
+                r = late_move_reductions(depth, move_index)
+                reduced_depth = depth - 1 - r
+                if reduced_depth < 0: reduced_depth = 0
+                evalu, child_line = search(chessboard, transposition_table, repetition_table, new_key, top_depth= top_depth, depth = reduced_depth, alpha = alpha, beta = beta, search_first = None, check_streak = 0, ply = ply + 1)
+                # reduced depth search.
+                if maximizing: needs_full_search = (evalu > alpha)
+                else: needs_full_search = (evalu < beta)
 
-            if needs_full_search and r > 0:
-                evalu, child_line = search(chessboard, transposition_table, new_key, top_depth = top_depth, depth = depth - 1, alpha = alpha, beta = beta, search_first = None)
-        else: # normal search
-            evalu, child_line = search(chessboard, transposition_table, new_key, top_depth=top_depth, depth=depth - 1, alpha=alpha, beta=beta, search_first= None, check_streak= check_streak)
+                if needs_full_search and r > 0:
+                    evalu, child_line = search(chessboard, transposition_table, repetition_table, new_key, top_depth = top_depth, depth = depth - 1, alpha = alpha, beta = beta, search_first = None, check_streak= 0, ply = ply + 1)
+            else: # normal search
+                evalu, child_line = search(chessboard, transposition_table, repetition_table, new_key, top_depth=top_depth, depth=depth - 1 + extension, alpha=alpha, beta=beta, search_first= None, check_streak= child_check_streak, ply = ply + 1)
 
-
+        # restoring globals/going back
         chessboard.pop()
-
+        repetition_table.decrement(new_key)
         non_kp_pieces =  old_non_kp
         endgameness = old_endg
 
@@ -599,7 +612,6 @@ def search(
 
         if alpha >= beta:
             # record the aforementioned killer move
-
             if (not chessboard.is_capture(move) and (move.promotion is None)): # important to filter out captures and promotions since those are already favorable
                 # additionally, captures are very position-dependent
                 if killer1_list[ply] != move:
@@ -645,7 +657,7 @@ def late_move_reductions(depth, move_index): # most quiet moves at the end of mo
 
 
 
-def iterative_deepening(target_time, FEN):
+def iterative_deepening(target_time, FEN, repetition_table, key):
     global non_kp_pieces, endgameness
 
     board.set_fen(FEN)
@@ -657,12 +669,16 @@ def iterative_deepening(target_time, FEN):
     for i in range(MAX_POSSIBLE_SEARCH_DEPTH):
         killer1_list[i] = None
         killer2_list[i] = None
+
     transposition_table = TranspositionTable()
-    init_Zkey = zobrist.zobrist_key(board)
+
+    init_Zkey = key # this used to be zobrist.zobrist_key(board)
     best_move = None
     current_depth = 1
+
+
     while( target_time/2 > time.time() - start_time):
-        evaluation, best_line = (search(board, transposition_table, init_Zkey, top_depth = current_depth, depth =  current_depth, search_first = best_move))
+        evaluation, best_line = (search(board, transposition_table, repetition_table, init_Zkey, top_depth = current_depth, depth =  current_depth, search_first = best_move))
         best_move = best_line[0]
         print(f"== DEPTH {current_depth} time elapsed:", round((time.time() - start_time), 2), f"s - Eval: {round((evaluation/100),2)}, best move {best_move} ==")
         current_depth += 1
@@ -672,6 +688,7 @@ def iterative_deepening(target_time, FEN):
         best_line_str += " "
     print("\nbest line: ", best_line_str)
     print("computer's move: ", best_move)
+
     return best_move
         #print("total TT hits:", transposition_table.total_hits)
 
