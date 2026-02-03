@@ -1,7 +1,7 @@
 import chess
 import chess.pgn
 import time
-import main
+import importlib
 from repetition import RepetitionTable
 import zobrist
 FEN_LIST = [
@@ -93,7 +93,7 @@ FEN_LIST = [
     "r2qk2r/ppp2p2/2nb1npp/3p2Q1/3PP3/2P2N1P/PP1N1P2/R1B2RK1 w kq - 0 16",
     "r4rk1/5ppp/3qpn2/pp1p4/3p2B1/2P1P3/PP3PPP/R2Q1RK1 w - - 0 18",
     "3q1r2/1p2ppbk/p2pb1pp/8/P6N/5Q1P/1PP1B3/2B2RK1 w - - 1 23",
-    "3r1rk1/p4ppp/1p2p3/2q1QP2/3p4/2P3P1/PP4KP/4RR2 w - - 0 20",
+    "3r1rk1/p4ppp/1p2p3/2q1QP2/3p4/2P3P1/PP4KP/4RR2 w - - 0 20", # here, no 88
     "2r2rk1/pp1nnpbp/1q2p1p1/3pP3/3p2P1/1NP4P/PP3PB1/R1BQR1K1 w - - 0 16",
     "rnb2rk1/2q1ppbp/p2p1np1/P1pP4/4P3/2N2N2/1P3PPP/R1BQKB1R w KQ - 2 11",
     "r1b1qr1k/ppp1p1bp/3p1np1/5p2/1nPP1B2/2NBPN2/PPQ2PPP/3R1RK1 w - - 6 11",
@@ -108,40 +108,66 @@ FEN_LIST = [
 ]
 RESULT_LABEL = {"1-0": "white", "0-1": "black", "1/2-1/2": "draw"}
 
-def self_play_pgn(thinking_time: float, start_fen: str = chess.STARTING_FEN, max_plies: int = 1000):
+
+
+def load_engine(engine_module_name: str):
+    return importlib.import_module(engine_module_name)
+def self_play_pgn(engine_white_name: str, engine_black_name: str, thinking_time: float, start_fen: str = chess.STARTING_FEN, max_plies: int = 1000):
+    eng_w = load_engine(engine_white_name)
+    eng_b = load_engine(engine_black_name)
+
     board = chess.Board(start_fen)
     game = chess.pgn.Game()
-
     if start_fen != chess.STARTING_FEN:
         game.setup(board)
         game.headers["SetUp"] = "1"
         game.headers["FEN"] = start_fen
 
+    # separate repetition tracking per engine (independent search state)
+    rep_w = RepetitionTable()
+    rep_b = RepetitionTable()
+
+    key0 = zobrist.zobrist_key(board)
+    key_w = key0
+    key_b = key0
+
+    rep_w.increment(key_w)
+    rep_b.increment(key_b)
+
     node = game
     ply = 0
 
-    rep = RepetitionTable()
-    key = zobrist.zobrist_key(board)
-    rep.increment(key)
-
     while not board.is_game_over(claim_draw=False) and ply < max_plies:
-        print("PLY: ", ply+1)
-        move = main.iterative_deepening(thinking_time, board.fen(), rep, key)
+        turn = "white" if board.turn else "black"
+        print("=============\nPLY: ", ply, "TURN:", turn)
+        if board.turn == chess.WHITE:
+            move = eng_w.iterative_deepening(thinking_time, board.fen(), rep_w, key_w)
+        else:
+            move = eng_b.iterative_deepening(thinking_time, board.fen(), rep_b, key_b)
 
         if move not in board.legal_moves:
-            raise ValueError(f"Illegal move returned: {move.uci()} in FEN {board.fen()}")
+            raise ValueError(f"Illegal move from {'white' if board.turn == chess.WHITE else 'black'} engine: "f"{move.uci()} in FEN {board.fen()}")
 
-        key = zobrist.update_zobrist_key(board, key, move)
-        rep.increment(key)
+        # update the real board + get new position key (this pushes move internally)
+        key0 = zobrist.update_zobrist_key(board, key0, move)
+
+        # keep both engines' repetition/key aligned to the actual played game
+        key_w = key0
+        key_b = key0
+        rep_w.increment(key_w)
+        rep_b.increment(key_b)
 
         node = node.add_main_variation(move)
         ply += 1
 
     if not board.is_game_over(claim_draw=False):
         game.headers["Result"] = "1/2-1/2"
-        return "1/2-1/2", board.fen(), game
+    else:
+        game.headers["Result"] = board.result(claim_draw=False)
 
-    game.headers["Result"] = board.result(claim_draw=False)
+    game.headers["White"] = engine_white_name
+    game.headers["Black"] = engine_black_name
+
     return game.headers["Result"], board.fen(), game
 
 def run_batch_selfplay(fens, thinking_time: float, max_plies: int = 1000, print_pgn: bool = False):
@@ -149,11 +175,11 @@ def run_batch_selfplay(fens, thinking_time: float, max_plies: int = 1000, print_
     black_wins = 0
     draws = 0
 
-    for i, fen in enumerate(fens, start=1):
-        print(f"\n=== GAME {i}/{len(fens)} ===")
+    for i, fen in enumerate(fens[81:], start=1):
+        print(f"\n=== GAME {i}/{len(fens[81:])} ===")
         t0 = time.time()
 
-        result, final_fen, game = self_play_pgn(thinking_time, fen, max_plies=max_plies)
+        result, final_fen, game = self_play_pgn("main", "main10", thinking_time, fen, max_plies=max_plies)
         who = RESULT_LABEL.get(result, "draw")
 
         if who == "white":

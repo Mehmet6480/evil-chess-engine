@@ -70,4 +70,4 @@ def play_game(bot_thinking_time):
             print("result: ", chessboard.result())
             return
 
-play_game(9)
+play_game(12)
