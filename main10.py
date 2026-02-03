@@ -197,7 +197,7 @@ endgameness = max(0.0, min(1.0, (8 - non_kp_pieces) / 4.0))
 
 WHITE_PST_COORDS = [56 - ((sq // 8) * 8) + (sq % 8) for sq in range(64)]
 BLACK_PST_COORDS = [WHITE_PST_COORDS[chess.square_mirror(sq)] for sq in range(64)]
-VALUES = [0, 100, 300, 325, 500, 900, 0] # 0th index, pawn, knight, bishop, rook, queen, king
+VALUES = [0, 100, 300, 325, 500, 900, 0]
 
 
 
@@ -229,13 +229,10 @@ def evaluate(chessboard):
     midgame_score = 0 ; endgame_score = 0
     white_king_attackers = 0 ; black_king_attackers = 0
     white_king_ring_attacked = 0 ; black_king_ring_attacked = 0
-    white_occupied = chessboard.occupied_co[chess.WHITE] ; black_occupied = chessboard.occupied_co[chess.BLACK]
 
     white_king_sq = chessboard.king(chess.WHITE) ; white_king_ring = chess.BB_KING_ATTACKS[white_king_sq]
     black_king_sq = chessboard.king(chess.BLACK) ; black_king_ring = chess.BB_KING_ATTACKS[black_king_sq]
 
-    MOBILITY_BONUSES_MG = [0, 0, 2, 6, 3, 2, -10] # none, pawn, knight, bishop, rook, queen
-    MOBILITY_BONUSES_EG = [0, 0, 0, 7, 4, 2, 0] # none, pawn, knight, bishop, rook, queen
     for piece_type in (chess.PAWN, chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN, chess.KING):
         base_value = piece_values[piece_type]
 
@@ -261,14 +258,8 @@ def evaluate(chessboard):
             # since the least significant bit and the original value will all have the LSB index as 1, it will be turned to 0
             # other bit indexes will be untouched
 
-            attacks = chessboard.attacks_mask(square)
-            amt_attacks = (attacks & ~white_occupied).bit_count()
-            # add mobility bonus
-            midgame_score += amt_attacks * MOBILITY_BONUSES_MG[piece_type]
-            endgame_score += amt_attacks * MOBILITY_BONUSES_EG[piece_type]
-
             # black king safety!
-            BKR_attack_intersection = attacks & black_king_ring
+            BKR_attack_intersection = chessboard.attacks_mask(square) & black_king_ring
             intersection_magnitude = BKR_attack_intersection.bit_count()
 
 
@@ -290,13 +281,7 @@ def evaluate(chessboard):
 
             black_bitboard ^= least_significant_bit
 
-            attacks = chessboard.attacks_mask(square)
-            amt_attacks = (attacks & ~black_occupied).bit_count()
-            # add mobility bonus
-            midgame_score -= amt_attacks * MOBILITY_BONUSES_MG[piece_type]
-            endgame_score -= amt_attacks * MOBILITY_BONUSES_EG[piece_type]
-
-            WKR_attack_intersection = attacks & white_king_ring
+            WKR_attack_intersection = chessboard.attacks_mask(square) & white_king_ring
             intersection_magnitude = WKR_attack_intersection.bit_count()
 
             if piece_type == chess.QUEEN: intersection_magnitude *= 2
@@ -321,13 +306,13 @@ def evaluate(chessboard):
     evaluation = phase*endgame_score + (1-phase)*midgame_score
 
     # mop up score
-    MOP_UP_THRESHOLD = 290
+    MOP_UP_THRESHOLD = 200
     if endgameness == 1:
         MD = (abs(chess.square_file(white_king_sq) - chess.square_file(black_king_sq)) + abs(chess.square_rank(white_king_sq) - chess.square_rank(black_king_sq)))
         if evaluation > MOP_UP_THRESHOLD:
-            evaluation += 98 - (7*MD)
+            evaluation += 42 - (3*MD)
         elif evaluation < -MOP_UP_THRESHOLD:
-            evaluation -= 98 - (7*MD)
+            evaluation -= 42 - (3*MD)
     return evaluation
 
 BB_FILE_A = chess.BB_FILE_A
