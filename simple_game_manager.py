@@ -47,7 +47,7 @@ def play_game(bot_thinking_time):
 
 
     while True:
-        bot_move = (main.iterative_deepening(bot_thinking_time, chessboard.fen(), rep, key))
+        bot_move, bot_eval = (main.iterative_deepening(bot_thinking_time, chessboard.fen(), rep, key))
         key = zobrist.update_zobrist_key(chessboard, key, bot_move)
         rep.increment(key)
 
@@ -70,4 +70,4 @@ def play_game(bot_thinking_time):
             print("result: ", chessboard.result())
             return
 
-play_game(12)
+play_game(5)
