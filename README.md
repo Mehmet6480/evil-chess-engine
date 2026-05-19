@@ -49,7 +49,7 @@ After you pick your board state and your color, the game will start. You must su
 
 ### 5. Engine thinking time
 
-By default, the engine's approximate thinking time is set to in `simple_game_manager.py` by this call at the end of the script:
+By default, the engine's approximate thinking time is set to 10 seconds in `simple_game_manager.py` by this call at the end of the script:
 
 `play_game(10)`
 
